@@ -33,6 +33,7 @@ from RecoTauTag.RecoTau.PATTauDiscriminationAgainstElectronMVA6_cfi import patTa
 from RecoTauTag.RecoTau.TauDiscriminatorTools import noPrediscriminants
 patTauDiscriminationByElectronRejectionMVA6v2Raw = patTauDiscriminationAgainstElectronMVA6.clone(
     Prediscriminants = noPrediscriminants, #already selected for MiniAOD
+    vetoEcalCracks = self.cms.bool(False), #keep taus in EB-EE cracks
     mvaName_NoEleMatch_wGwoGSF_BL = 'RecoTauTag_antiElectron'+antiElectronDiscrMVA6_version+'_gbr_NoEleMatch_wGwoGSF_BL',
     mvaName_NoEleMatch_wGwoGSF_EC = 'RecoTauTag_antiElectron'+antiElectronDiscrMVA6_version+'_gbr_NoEleMatch_wGwoGSF_EC',
     mvaName_NoEleMatch_woGwoGSF_BL = 'RecoTauTag_antiElectron'+antiElectronDiscrMVA6_version+'_gbr_NoEleMatch_woGwoGSF_BL',
