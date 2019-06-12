@@ -91,7 +91,6 @@ for modifier in run2_miniAOD_80XLegacy, run2_nanoAOD_94X2016: # to be updated wh
         )
     )
 
-
 genWeightsTable = cms.EDProducer("GenWeightsTableProducer",
     genEvent = cms.InputTag("generator"),
     lheInfo = cms.VInputTag(cms.InputTag("externalLHEProducer"), cms.InputTag("source")),
