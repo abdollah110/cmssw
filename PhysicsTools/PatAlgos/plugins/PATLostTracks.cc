@@ -45,7 +45,8 @@ namespace pat {
 
   private:
     const edm::EDGetTokenT<reco::PFCandidateCollection> cands_;
-    const edm::EDGetTokenT<edm::Association<pat::PackedCandidateCollection>> map_;
+    const edm::EDGetTokenT<edm::Association<pat::PackedCandidateCollection>> pf2pc_;
+    const edm::EDGetTokenT<pat::PackedCandidateCollection> pcands_;
     const edm::EDGetTokenT<reco::TrackCollection> tracks_;
     const edm::EDGetTokenT<reco::VertexCollection> vertices_;
     const edm::EDGetTokenT<reco::VertexCompositeCandidateCollection> kshorts_;
@@ -71,8 +72,9 @@ namespace pat {
 
 pat::PATLostTracks::PATLostTracks(const edm::ParameterSet& iConfig)
     : cands_(consumes<reco::PFCandidateCollection>(iConfig.getParameter<edm::InputTag>("inputCandidates"))),
-      map_(consumes<edm::Association<pat::PackedCandidateCollection>>(
+      pf2pc_(consumes<edm::Association<pat::PackedCandidateCollection>>(
           iConfig.getParameter<edm::InputTag>("packedPFCandidates"))),
+      pcands_(consumes<pat::PackedCandidateCollection>(iConfig.getParameter<edm::InputTag>("packedPFCandidates"))),
       tracks_(consumes<reco::TrackCollection>(iConfig.getParameter<edm::InputTag>("inputTracks"))),
       vertices_(consumes<reco::VertexCollection>(iConfig.getParameter<edm::InputTag>("secondaryVertices"))),
       kshorts_(consumes<reco::VertexCompositeCandidateCollection>(iConfig.getParameter<edm::InputTag>("kshorts"))),
@@ -115,6 +117,7 @@ pat::PATLostTracks::PATLostTracks(const edm::ParameterSet& iConfig)
   produces<std::vector<pat::PackedCandidate>>();
   produces<std::vector<pat::PackedCandidate>>("eleTracks");
   produces<edm::Association<pat::PackedCandidateCollection>>();
+  produces<edm::Association<pat::PackedCandidateCollection>>("eleTracks");
 }
 
 pat::PATLostTracks::~PATLostTracks() {}
@@ -124,7 +127,10 @@ void pat::PATLostTracks::produce(edm::StreamID, edm::Event& iEvent, const edm::E
   iEvent.getByToken(cands_, cands);
 
   edm::Handle<edm::Association<pat::PackedCandidateCollection>> pf2pc;
-  iEvent.getByToken(map_, pf2pc);
+  iEvent.getByToken(pf2pc_, pf2pc);
+
+  edm::Handle<pat::PackedCandidateCollection> pcands;
+  iEvent.getByToken(pcands_, pcands);
 
   edm::Handle<reco::TrackCollection> tracks;
   iEvent.getByToken(tracks_, tracks);
@@ -152,6 +158,7 @@ void pat::PATLostTracks::produce(edm::StreamID, edm::Event& iEvent, const edm::E
   auto outPtrEleTrksAsCands = std::make_unique<std::vector<pat::PackedCandidate>>();
 
   std::vector<TrkStatus> trkStatus(tracks->size(), TrkStatus::NOTUSED);
+  std::map<int, int> trk2pcEle;
   //Mark all tracks used in candidates
   //check if packed candidates are storing the tracks by seeing if number of hits >0
   //currently we dont use that information though
@@ -160,11 +167,13 @@ void pat::PATLostTracks::produce(edm::StreamID, edm::Event& iEvent, const edm::E
     edm::Ref<reco::PFCandidateCollection> r(cands, ic);
     const reco::PFCandidate& cand = (*cands)[ic];
     if (cand.charge() && cand.trackRef().isNonnull() && cand.trackRef().id() == tracks.id()) {
-      if (cand.pdgId() == 11)
+      if (cand.pdgId() == 11) {
         trkStatus[cand.trackRef().key()] = TrkStatus::PFELECTRON;
-      else if (cand.pdgId() == -11)
+        trk2pcEle[cand.trackRef().key()] = (*pf2pc)[r].key();
+      } else if (cand.pdgId() == -11) {
         trkStatus[cand.trackRef().key()] = TrkStatus::PFPOSITRON;
-      else if ((*pf2pc)[r]->numberOfHits() > 0)
+        trk2pcEle[cand.trackRef().key()] = (*pf2pc)[r].key();
+      } else if ((*pf2pc)[r]->numberOfHits() > 0)
         trkStatus[cand.trackRef().key()] = TrkStatus::PFCAND;
       else
         trkStatus[cand.trackRef().key()] = TrkStatus::PFCANDNOTRKPROPS;
@@ -193,7 +202,9 @@ void pat::PATLostTracks::produce(edm::StreamID, edm::Event& iEvent, const edm::E
     }
   }
   std::vector<int> mapping(tracks->size(), -1);
+  std::vector<int> pc2eleTrk_mapping(pcands->size(), -1);
   int lostTrkIndx = 0;
+  int eleTrkIndx = 0;
   for (unsigned int trkIndx = 0; trkIndx < tracks->size(); trkIndx++) {
     reco::TrackRef trk(tracks, trkIndx);
     if (trkStatus[trkIndx] == TrkStatus::VTX || (trkStatus[trkIndx] == TrkStatus::NOTUSED && passTrkCuts(*trk))) {
@@ -223,17 +234,25 @@ void pat::PATLostTracks::produce(edm::StreamID, edm::Event& iEvent, const edm::E
         pv = reco::VertexRef(pvs, 0);
       }
       addPackedCandidate(*outPtrEleTrksAsCands, trk, pv, pvRefProd, trkStatus[trkIndx], pvAsso.second, muons);
+      pc2eleTrk_mapping[trk2pcEle[trkIndx]] = eleTrkIndx;
+      eleTrkIndx++;
     }
   }
 
   iEvent.put(std::move(outPtrTrks));
-  iEvent.put(std::move(outPtrEleTrksAsCands), "eleTracks");
   edm::OrphanHandle<pat::PackedCandidateCollection> oh = iEvent.put(std::move(outPtrTrksAsCands));
   auto tk2pc = std::make_unique<edm::Association<pat::PackedCandidateCollection>>(oh);
   edm::Association<pat::PackedCandidateCollection>::Filler tk2pcFiller(*tk2pc);
   tk2pcFiller.insert(tracks, mapping.begin(), mapping.end());
   tk2pcFiller.fill();
   iEvent.put(std::move(tk2pc));
+  edm::OrphanHandle<pat::PackedCandidateCollection> oh_eleTrks =
+      iEvent.put(std::move(outPtrEleTrksAsCands), "eleTracks");
+  auto pc2eleTrk = std::make_unique<edm::Association<pat::PackedCandidateCollection>>(oh_eleTrks);
+  edm::Association<pat::PackedCandidateCollection>::Filler pc2eleTrkFiller(*pc2eleTrk);
+  pc2eleTrkFiller.insert(pcands, pc2eleTrk_mapping.begin(), pc2eleTrk_mapping.end());
+  pc2eleTrkFiller.fill();
+  iEvent.put(std::move(pc2eleTrk), "eleTracks");
 }
 
 bool pat::PATLostTracks::passTrkCuts(const reco::Track& tr) const {
@@ -278,16 +297,20 @@ void pat::PATLostTracks::addPackedCandidate(std::vector<pat::PackedCandidate>& c
       cands.back().setTrackProperties(*trk, covariancePackingSchemas_[4], covarianceVersion_);
     } else {
       if (trk->hitPattern().numberOfValidPixelHits() > 0) {
-	cands.back().setTrackProperties(*trk, covariancePackingSchemas_[0], covarianceVersion_);  // high quality with pixels
+        cands.back().setTrackProperties(
+            *trk, covariancePackingSchemas_[0], covarianceVersion_);  // high quality with pixels
       } else {
-	cands.back().setTrackProperties(*trk, covariancePackingSchemas_[1], covarianceVersion_); // high quality without pixels
+        cands.back().setTrackProperties(
+            *trk, covariancePackingSchemas_[1], covarianceVersion_);  // high quality without pixels
       }
     }
   } else if (trk->pt() > 0.5) {
     if (trk->hitPattern().numberOfValidPixelHits() > 0) {
-      cands.back().setTrackProperties(*trk, covariancePackingSchemas_[2], covarianceVersion_);  // low quality with pixels
+      cands.back().setTrackProperties(
+          *trk, covariancePackingSchemas_[2], covarianceVersion_);  // low quality with pixels
     } else {
-      cands.back().setTrackProperties(*trk, covariancePackingSchemas_[3], covarianceVersion_);  // low quality without pixels
+      cands.back().setTrackProperties(
+          *trk, covariancePackingSchemas_[3], covarianceVersion_);  // low quality without pixels
     }
   }
   cands.back().setAssociationQuality(pvAssocQuality);
